@@ -1,0 +1,73 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recógeme UDES+</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--ink:#eaf4ff;--mut:#9db8e0;--neon:#38bdf8;--line:rgba(255,255,255,.15);--glass:rgba(255,255,255,.07)}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font:15px/1.5 system-ui,sans-serif;color:var(--ink);background:radial-gradient(900px 500px at 85% -10%,#0b4fb8,transparent 60%),linear-gradient(160deg,#031a4a,#052a6e 60%,#021238) fixed}
+.w{max-width:520px;margin:0 auto;padding:16px}.g{background:var(--glass);border:1px solid var(--line);border-radius:20px;padding:14px;margin-bottom:12px;backdrop-filter:blur(16px);box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
+button,input{font:inherit;color:var(--ink);border:1px solid var(--line);background:var(--glass);border-radius:12px;padding:9px 12px}input{width:100%;margin-bottom:8px}input[type=checkbox]{width:auto;margin:0 6px 0 0}button{cursor:pointer}
+.p{background:linear-gradient(135deg,#0ea5e9,#2563eb);border:0;font-weight:600;box-shadow:0 0 18px rgba(56,189,248,.45)}.m{color:var(--mut);font-size:13px}.r{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#map{height:300px;border-radius:20px;margin-bottom:12px}.al{background:rgba(251,191,36,.15);border:1px solid #fbbf24;border-radius:12px;padding:8px 10px;font-size:14px;margin-bottom:8px}.ok{background:rgba(52,211,153,.15);border-color:#34d399}
+table{width:100%;font-size:13px;border-collapse:collapse}td,th{padding:6px 3px;border-bottom:1px solid var(--line);text-align:left;font-weight:400}td input{width:60px;margin:0;padding:4px}
+#msg{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#0b2c70;border:1px solid var(--neon);padding:8px 14px;border-radius:12px;display:none;z-index:999}#qr{background:#fff;padding:8px;border-radius:12px;display:inline-block}
+</style></head><body><div class="w"><div id="msg"></div>
+<div id="login" class="g"><h2 style="margin:0 0 8px">Recógeme UDES+</h2><div id="rg" hidden><input id="nm" placeholder="Nombre"></div>
+<input id="em" placeholder="Correo" value="pasajero@udes.test"><input id="pw" type="password" placeholder="Contraseña (mín. 8)" value="udes1234">
+<label id="cl" class="m" hidden style="display:none"><input id="cs" type="checkbox">Autorizo el tratamiento de mis datos (nombre y correo) para operar el servicio. <a href="#" onclick="priv();return false" style="color:var(--neon)">Ver aviso</a></label>
+<div class="r" style="margin-top:8px"><button class="p" id="sub" onclick="go()">Entrar</button><button id="tg" onclick="mode()">Soy pasajero nuevo</button></div>
+<div class="m" style="margin-top:8px">Demo: conductor@ o admin@udes.test, clave udes1234</div></div>
+<div id="app" hidden><div class="r" style="justify-content:space-between;margin-bottom:10px"><b id="who"></b><button onclick="logout()">Salir</button></div><div id="ban"></div><div id="map"></div><div id="side"></div></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);let T=localStorage.t,st,map,mk={},me,meMk,manual,route,gw,sm,seen=new Set,first=1,reg=0,near={};
+const say=m=>{const e=$("#msg");e.textContent=m;e.style.display="block";setTimeout(()=>e.style.display="none",3000)};
+const api=async(p,m="GET",b)=>{const r=await fetch("/api/"+p,{method:m,headers:{"Content-Type":"application/json",Authorization:"Bearer "+T},body:b?JSON.stringify(b):undefined});
+  const j=await r.json().catch(()=>({}));if(!r.ok){if(r.status==401&&T&&p=="state")logout();throw new Error(j.error||"Error")}return j};
+const act=(p,b,ok)=>api(p,"POST",b).then(()=>{ok&&say(ok);poll()}).catch(e=>say(e.message));
+const fm=n=>"$"+Number(n).toLocaleString("es-CO");
+function mode(){reg=!reg;$("#rg").hidden=!reg;$("#cl").style.display=reg?"block":"none";$("#sub").textContent=reg?"Crear cuenta":"Entrar";$("#tg").textContent=reg?"Ya tengo cuenta":"Soy pasajero nuevo";if(reg){$("#em").value=$("#pw").value=""}}
+const priv=()=>alert("AVISO DE PRIVACIDAD (borrador)\n\nResponsable: [UDES / nombre del emprendimiento].\nDatos: nombre, correo y registro de viajes y pagos. Tu ubicación NO se envía al servidor: se usa solo en tu dispositivo para avisarte que el bus está cerca.\nFinalidad: operar el servicio de bus, avisos y control de pagos.\nDerechos (Ley 1581 de 2012): conocer, actualizar, rectificar y suprimir tus datos y revocar la autorización. Puedes eliminar tu cuenta desde la app.\nContacto: [correo de contacto].");
+async function go(){try{const b={email:$("#em").value,password:$("#pw").value};if(reg){b.name=$("#nm").value;b.consent=$("#cs").checked}
+  T=localStorage.t=(await api(reg?"register":"login","POST",b)).token;init()}catch(e){say(e.message)}}
+function logout(){localStorage.clear();clearInterval(gw);clearInterval(sm);location.reload()}
+function init(){if(!T)return;$("#login").hidden=true;$("#app").hidden=false;poll();setInterval(poll,2000)}
+async function initMap(){route=await (await fetch("route.json")).json();map=L.map("map");L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"}).addTo(map);
+  const ln=L.polyline(route.line.map(([x,y])=>[y,x]),{color:"#ef4466",weight:5,opacity:.9}).addTo(map);map.fitBounds(ln.getBounds().pad(.15));
+  route.stops.forEach(s=>L.circleMarker([s.c[1],s.c[0]],{radius:6,color:"#031a4a",fillColor:"#fff",fillOpacity:1}).addTo(map).bindTooltip(s.name));
+  if(st.role=="pasajero"){map.on("click",e=>{manual=1;setMe(e.latlng.lat,e.latlng.lng);say("Tu punto de espera quedó marcado")});
+    navigator.geolocation&&navigator.geolocation.watchPosition(p=>{if(!manual)setMe(p.coords.latitude,p.coords.longitude)},()=>{},{enableHighAccuracy:true})}}
+function setMe(a,b){me=[a,b];meMk?meMk.setLatLng(me):meMk=L.marker(me).addTo(map).bindTooltip("Tú");}
+const dist=(a,b,c,d)=>{const R=6371e3,r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+async function poll(){try{st=await api("state");$("#who").textContent=st.name+" · "+st.role;if(!map&&st.role!="admin")await initMap();if(st.role=="admin")$("#map").remove();
+  const ids=new Set(st.alerts.map(a=>a.id));st.alerts.forEach(a=>{if(!seen.has(a.id)){seen.add(a.id);if(!first){say("⚠ "+a.type+" ("+a.plate+")");navigator.vibrate&&navigator.vibrate([200,100,200])}}});first=0;
+  $("#ban").innerHTML=st.alerts.map(a=>`<div class="al">⚠ <b>${a.type}</b> · ${a.plate} · hace ${Math.max(0,Math.round((Date.now()-a.ts)/60000))} min</div>`).join("");
+  if(map)st.buses.forEach(b=>{if(!b.active||b.lat==null){mk[b.id]&&(map.removeLayer(mk[b.id]),delete mk[b.id]);return}
+    if(!mk[b.id])mk[b.id]=L.circleMarker([b.lat,b.lng],{radius:10,color:"#fff",weight:2,fillOpacity:1}).addTo(map).bindTooltip(b.plate);mk[b.id].setLatLng([b.lat,b.lng]).setStyle({fillColor:b.age>12?"#fbbf24":"#38bdf8"})});
+  if(document.activeElement.tagName!="INPUT")draw()}catch(e){}}
+const card=b=>{const d=me&&b.lat!=null&&b.active?Math.round(dist(me[0],me[1],b.lat,b.lng)):null;
+  if(d!=null&&d<500&&!near[b.id]){near[b.id]=1;say("🚌 "+b.plate+" está cerca de ti (~"+d+" m)");navigator.vibrate&&navigator.vibrate(300)}if(d!=null&&d>800)delete near[b.id];
+  return `<div class="g"><b>${b.plate}</b> ${b.active?"":'<span class="m">(sin ruta activa)</span>'}${d!=null&&d<500?'<div class="al ok" style="margin:6px 0">🚌 ¡Ya está cerca de ti! ~'+d+' m</div>':d!=null?'<span class="m"> · a ~'+d+' m de ti</span>':""}
+  <div>${Math.max(0,b.capacity-b.occupancy)} lugares disponibles <span class="m">(estimado: ${b.occupancy} de ${b.capacity})</span></div><div class="m">Última señal: ${b.age==null?"sin datos":"hace "+b.age+" s"}</div>${b.active&&b.age>12?'<div class="al" style="margin-top:6px">Señal antigua: la posición puede no ser actual.</div>':""}</div>`};
+function draw(){const r=st.role;$("#side").innerHTML=r=="pasajero"?pas():r=="conductor"?con():adm();
+  const q=$("#qr");if(q&&st.open&&st.open.st!="pagado")new QRCode(q,{text:`RECOGEME|T${st.open.id}|${st.fare}`,width:132,height:132})}
+function pas(){const o=st.open,hint=me?"":'<div class="m" style="margin-bottom:8px">Toca el mapa para marcar dónde esperas y te avisamos cuando el bus esté cerca.</div>';
+  return hint+st.buses.map(b=>card(b)+(b.active&&!o?`<div style="margin:-6px 0 12px"><button class="p" onclick="act('scan',{bus_id:${b.id}},'Abordaje registrado')">Escanear QR del bus ${b.plate}</button></div>`:"")).join("")
+  +(o?`<div class="g"><b>Tu pasaje · ${fm(st.fare)}</b>${o.st=="pagado"?`<div class="al ok" style="margin-top:8px">✔ Pagado · comprobante <b>${o.rc}</b><div class="m">Muéstraselo al conductor si te lo pide.</div></div>`:`<div class="m" style="margin:6px 0">Escanea con Nequi o Bre-B (demo):</div><div id="qr"></div><div style="margin-top:8px"><button class="p" onclick="act('pay',{ticket:${o.id}},'Pago confirmado')">Simular pago confirmado</button></div>`}
+  <div style="margin-top:8px"><button onclick="act('alight',{},'Descenso registrado')">Registrar mi descenso</button></div></div>`:"")
+  +st.debts.map(t=>`<div class="g"><div class="al">Deuda pendiente ${fm(st.fare)} · ${new Date(t.ts).toLocaleString("es-CO")}</div><button class="p" onclick="act('pay',{ticket:${t.id}},'Deuda pagada')">Pagar ahora (demo)</button></div>`).join("")
+  +`<div class="r m"><button onclick="priv()">Aviso de privacidad</button><button onclick="if(confirm('¿Eliminar tu cuenta y tus datos personales?'))api('me','DELETE').then(logout)">Eliminar mi cuenta</button></div>`}
+function con(){const b=st.buses.find(x=>x.id==st.bus)||{};return (b.id?card(b):"")+`<div class="g"><div class="r"><input id="ini" type="number" min="0" value="0" style="width:90px;margin:0"><button class="p" onclick="act('driver/start',{initial:$('#ini').value},'Ruta iniciada')">Iniciar ruta</button><button onclick="act('driver/end',{},'Ruta cerrada');clearInterval(gw);clearInterval(sm)">Cerrar ruta</button></div>
+  <div class="r" style="margin-top:8px"><button onclick="gps()">Enviar GPS real</button><button onclick="sim()">Simular recorrido</button></div></div>
+  <div class="g"><b>Avisar a los pasajeros</b><div class="r" style="margin-top:8px">${["Tráfico pesado","Falla mecánica","Vía bloqueada","Retraso"].map(x=>`<button onclick="act('driver/alert',{type:'${x}'},'Aviso enviado a los pasajeros')">${x}</button>`).join("")}<button onclick="act('driver/alert/clear',{},'Avisos retirados')">Todo despejado</button></div>
+  <div class="r" style="margin-top:8px"><button onclick="act('driver/adjust',{delta:-1})">− Descenso</button><button onclick="act('driver/adjust',{delta:1})">+ Pasaje excepcional</button></div></div>
+  <div class="g"><b>A bordo (${(st.aboard||[]).length})</b>${(st.aboard||[]).map(p=>`<div class="m">${p.st=="pagado"?"✔ Pagado "+p.rc:"⏳ Pendiente"} · ${p.n}</div>`).join("")||'<div class="m">Nadie registrado.</div>'}
+  <div style="margin-top:8px"><b>Deudas</b>${(st.debts||[]).map(p=>`<div class="m">❌ ${p.n} · ${new Date(p.ts).toLocaleString("es-CO")}</div>`).join("")||'<div class="m">Sin deudas.</div>'}</div></div>`}
+function adm(){const s=st.stats;return `<div class="g"><b>Indicadores</b><div class="m">Validaciones exitosas: ${s.rate==null?"sin datos":s.rate+"%"} · Antigüedad media de señal: ${s.age==null?"sin datos":s.age+" s"}<br>Pasajes pagados: ${s.paid} · Deudas: ${s.debt}</div></div>
+  <div class="g"><b>Flota</b><table><tr><th>Bus</th><th>Ocup.</th><th>Capacidad</th><th>Activo</th><th></th></tr>${st.buses.map(b=>`<tr><td>${b.plate}</td><td>${b.occupancy}</td><td><input id="c${b.id}" type="number" min="1" max="100" value="${b.capacity}"></td><td><input id="a${b.id}" type="checkbox" ${b.active?"checked":""}></td><td><button onclick="sv(${b.id})">Guardar</button></td></tr>`).join("")}</table></div>
+  <div class="g"><b>Auditoría</b>${st.audit.map(x=>`<div class="m">${new Date(x.ts).toLocaleTimeString("es-CO")} · ${x.actor} · ${x.action} ${x.detail||""}</div>`).join("")}</div>`}
+const sv=id=>api("admin/buses/"+id,"PUT",{capacity:$("#c"+id).value,active:$("#a"+id).checked}).then(()=>{say("Guardado");poll()}).catch(e=>say(e.message));
+const send=(a,b)=>api("driver/location","POST",{lat:a,lng:b}).catch(()=>{});
+function gps(){clearInterval(sm);if(!navigator.geolocation)return say("Este dispositivo no tiene GPS");const f=()=>navigator.geolocation.getCurrentPosition(p=>send(p.coords.latitude,p.coords.longitude),()=>say("Permite el acceso a la ubicación"),{enableHighAccuracy:true});clearInterval(gw);f();gw=setInterval(f,4000)}
+function sim(){clearInterval(gw);clearInterval(sm);let i=0;const L2=route.line;sm=setInterval(()=>{const[x,y]=L2[i++%L2.length];send(y,x)},2000);say("Simulando recorrido sobre la ruta")}
+init();
+</script></body></html>
